@@ -175,6 +175,9 @@ Vector<uint64_t> renderable_drm_format_modifiers(VulkanContext const& context, V
 
 ErrorOr<NonnullRefPtr<VulkanImage>> create_shared_vulkan_image(VulkanContext const& context, uint32_t width, uint32_t height, VkFormat format, ReadonlySpan<uint64_t> modifiers)
 {
+    if (!context.can_share_dmabuf_images)
+        return Error::from_string_literal("The Vulkan device cannot share images as dma-bufs");
+
     // populate a list of all format modifiers that are both renderable, sampleable,
     // and accepted by the caller
     Vector<uint64_t> format_mods;
@@ -424,6 +427,8 @@ ErrorOr<ImportedDmaBufImage> import_linux_dmabuf_image(VkPhysicalDevice physical
 
 ErrorOr<NonnullRefPtr<Bitmap>> read_linux_dmabuf_into_bitmap(VulkanContext const& context, LinuxDmaBufHandle const& dmabuf)
 {
+    if (!context.can_share_dmabuf_images)
+        return Error::from_string_literal("The Vulkan device cannot import dma-bufs");
     if (dmabuf.drm_format != DRM_FORMAT_ARGB8888)
         return Error::from_string_literal("dma-buf is not a BGRA image");
 

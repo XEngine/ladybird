@@ -115,8 +115,11 @@ ErrorOr<int> ladybird_main(Main::Arguments arguments)
 
     Optional<Gfx::GpuDeviceIdentity> gpu_device_identity;
 #ifdef USE_VULKAN_DMABUF_IMAGES
-    if (skia_backend_context && skia_backend_context->vulkan_context().can_sample_through_ycbcr_conversion)
-        gpu_device_identity = skia_backend_context->vulkan_context().device_identity;
+    if (skia_backend_context) {
+        auto const& vulkan_context = skia_backend_context->vulkan_context();
+        if (vulkan_context.can_sample_through_ycbcr_conversion && vulkan_context.can_share_dmabuf_images)
+            gpu_device_identity = vulkan_context.device_identity;
+    }
 #endif
 
     auto client = TRY(IPC::take_over_accepted_client_from_system_server<Compositor::ConnectionFromClient>(

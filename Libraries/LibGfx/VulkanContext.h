@@ -28,6 +28,7 @@ struct VulkanContext {
     uint32_t graphics_queue_family { 0 };
     ReadonlySpan<char const*> enabled_device_extensions;
     bool can_sample_through_ycbcr_conversion { false };
+    bool can_share_dmabuf_images { false };
 #    ifdef USE_VULKAN_DMABUF_IMAGES
     VkCommandPool command_pool { VK_NULL_HANDLE };
     VkCommandBuffer command_buffer { VK_NULL_HANDLE };

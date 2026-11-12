@@ -92,6 +92,8 @@ static Vector<u64> shared_backing_store_drm_format_modifiers(Gfx::VulkanContext 
 static ErrorOr<GpuBackingStore> create_shared_gpu_backing_store(Gfx::IntSize size, Gfx::SkiaBackendContext& skia_backend_context)
 {
     auto const& vulkan_context = skia_backend_context.vulkan_context();
+    if (!vulkan_context.can_share_dmabuf_images)
+        return Error::from_string_literal("The Vulkan device cannot share images as dma-bufs");
     auto const modifiers = shared_backing_store_drm_format_modifiers(vulkan_context);
     auto image = TRY(Gfx::create_shared_vulkan_image(vulkan_context, size.width(), size.height(), VK_FORMAT_B8G8R8A8_UNORM, modifiers.span()));
     auto shared_image = Gfx::duplicate_shared_image(*image);

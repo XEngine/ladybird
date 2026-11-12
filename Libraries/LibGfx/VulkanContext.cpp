@@ -109,10 +109,23 @@ static ReadonlySpan<char const*> device_extensions_to_enable(VkPhysicalDevice ph
     extensions.resize(extension_count);
     vkEnumerateDeviceExtensionProperties(physical_device, nullptr, &extension_count, extensions.data());
 
+    auto has_extension = [&](char const* name) {
+        return any_of(extensions, [&](auto const& extension) { return strcmp(extension.extensionName, name) == 0; });
+    };
+
     ReadonlySpan<char const*> enabled_extensions = s_enabled_device_extensions;
-    if (any_of(extensions, [](auto const& extension) { return strcmp(extension.extensionName, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME) == 0; }))
+    auto required_extensions = enabled_extensions.trim(enabled_extensions.size() - 1);
+
+    for (auto const* extension : required_extensions) {
+        if (!has_extension(extension)) {
+            dbgln("Vulkan device does not support {}, not sharing images as dma-bufs", extension);
+            return {};
+        }
+    }
+
+    if (has_extension(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
         return enabled_extensions;
-    return enabled_extensions.trim(enabled_extensions.size() - 1);
+    return required_extensions;
 }
 #else
 static ReadonlySpan<char const*> device_extensions_to_enable(VkPhysicalDevice)
@@ -132,7 +145,7 @@ static bool device_can_sample_through_ycbcr_conversion(VkPhysicalDevice physical
     return ycbcr_conversion_features.samplerYcbcrConversion == VK_TRUE;
 }
 
-static ErrorOr<VkDevice> create_logical_device(VkPhysicalDevice physical_device, uint32_t* graphics_queue_family, bool enable_sampling_through_ycbcr_conversion)
+static ErrorOr<VkDevice> create_logical_device(VkPhysicalDevice physical_device, uint32_t* graphics_queue_family, bool enable_sampling_through_ycbcr_conversion, ReadonlySpan<char const*> enabled_extensions)
 {
     VkDevice device;
 
@@ -178,7 +191,6 @@ static ErrorOr<VkDevice> create_logical_device(VkPhysicalDevice physical_device,
     create_device_info.pNext = &features;
     create_device_info.pQueueCreateInfos = &queue_create_info;
     create_device_info.queueCreateInfoCount = 1;
-    auto enabled_extensions = device_extensions_to_enable(physical_device);
     create_device_info.enabledExtensionCount = enabled_extensions.size();
     create_device_info.ppEnabledExtensionNames = enabled_extensions.data();
 
@@ -250,7 +262,9 @@ ErrorOr<VulkanContext> create_vulkan_context(Optional<GpuDeviceIdentity> const& 
 
     uint32_t graphics_queue_family = 0;
     auto can_sample_through_ycbcr_conversion = device_can_sample_through_ycbcr_conversion(physical_device);
-    auto* logical_device = TRY(create_logical_device(physical_device, &graphics_queue_family, can_sample_through_ycbcr_conversion));
+    auto enabled_device_extensions = device_extensions_to_enable(physical_device);
+    bool can_share_dmabuf_images = !enabled_device_extensions.is_empty();
+    auto* logical_device = TRY(create_logical_device(physical_device, &graphics_queue_family, can_sample_through_ycbcr_conversion, enabled_device_extensions));
     VkQueue graphics_queue;
     vkGetDeviceQueue(logical_device, graphics_queue_family, 0, &graphics_queue);
 
@@ -258,17 +272,22 @@ ErrorOr<VulkanContext> create_vulkan_context(Optional<GpuDeviceIdentity> const& 
     VkCommandPool command_pool = TRY(create_command_pool(logical_device, graphics_queue_family));
     VkCommandBuffer command_buffer = TRY(allocate_command_buffer(logical_device, command_pool));
 
-    auto pfn_vk_get_memory_fd_khr = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(logical_device, "vkGetMemoryFdKHR"));
-    if (pfn_vk_get_memory_fd_khr == nullptr) {
-        return Error::from_string_literal("vkGetMemoryFdKHR unavailable");
-    }
-    auto pfn_vk_get_memory_fd_properties_khr = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(vkGetDeviceProcAddr(logical_device, "vkGetMemoryFdPropertiesKHR"));
-    if (pfn_vk_get_memory_fd_properties_khr == nullptr) {
-        return Error::from_string_literal("vkGetMemoryFdPropertiesKHR unavailable");
-    }
-    auto pfn_vk_get_image_drm_format_modifier_properties_khr = reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(vkGetDeviceProcAddr(logical_device, "vkGetImageDrmFormatModifierPropertiesEXT"));
-    if (pfn_vk_get_image_drm_format_modifier_properties_khr == nullptr) {
-        return Error::from_string_literal("vkGetImageDrmFormatModifierPropertiesEXT unavailable");
+    PFN_vkGetMemoryFdKHR pfn_vk_get_memory_fd_khr = nullptr;
+    PFN_vkGetMemoryFdPropertiesKHR pfn_vk_get_memory_fd_properties_khr = nullptr;
+    PFN_vkGetImageDrmFormatModifierPropertiesEXT pfn_vk_get_image_drm_format_modifier_properties_khr = nullptr;
+    if (can_share_dmabuf_images) {
+        pfn_vk_get_memory_fd_khr = reinterpret_cast<PFN_vkGetMemoryFdKHR>(vkGetDeviceProcAddr(logical_device, "vkGetMemoryFdKHR"));
+        if (pfn_vk_get_memory_fd_khr == nullptr) {
+            return Error::from_string_literal("vkGetMemoryFdKHR unavailable");
+        }
+        pfn_vk_get_memory_fd_properties_khr = reinterpret_cast<PFN_vkGetMemoryFdPropertiesKHR>(vkGetDeviceProcAddr(logical_device, "vkGetMemoryFdPropertiesKHR"));
+        if (pfn_vk_get_memory_fd_properties_khr == nullptr) {
+            return Error::from_string_literal("vkGetMemoryFdPropertiesKHR unavailable");
+        }
+        pfn_vk_get_image_drm_format_modifier_properties_khr = reinterpret_cast<PFN_vkGetImageDrmFormatModifierPropertiesEXT>(vkGetDeviceProcAddr(logical_device, "vkGetImageDrmFormatModifierPropertiesEXT"));
+        if (pfn_vk_get_image_drm_format_modifier_properties_khr == nullptr) {
+            return Error::from_string_literal("vkGetImageDrmFormatModifierPropertiesEXT unavailable");
+        }
     }
 #endif
 
@@ -281,8 +300,9 @@ ErrorOr<VulkanContext> create_vulkan_context(Optional<GpuDeviceIdentity> const& 
         .logical_device = logical_device,
         .graphics_queue = graphics_queue,
         .graphics_queue_family = graphics_queue_family,
-        .enabled_device_extensions = device_extensions_to_enable(physical_device),
+        .enabled_device_extensions = enabled_device_extensions,
         .can_sample_through_ycbcr_conversion = can_sample_through_ycbcr_conversion,
+        .can_share_dmabuf_images = can_share_dmabuf_images,
 #ifdef USE_VULKAN_DMABUF_IMAGES
         .command_pool = command_pool,
         .command_buffer = command_buffer,

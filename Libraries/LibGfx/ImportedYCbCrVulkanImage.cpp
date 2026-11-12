@@ -240,6 +240,8 @@ ErrorOr<NonnullOwnPtr<ImportedYCbCrVulkanImage>> ImportedYCbCrVulkanImage::impor
 {
     if (!context.can_sample_through_ycbcr_conversion)
         return Error::from_string_literal("The Vulkan device cannot sample through a YCbCr conversion");
+    if (!context.can_share_dmabuf_images)
+        return Error::from_string_literal("The Vulkan device cannot import dma-bufs");
     if (dma_buf.size.is_empty())
         return Error::from_string_literal("The dma-buf image is empty");
     auto format = ycbcr_vulkan_format_for_drm_format(dma_buf.drm_format);
